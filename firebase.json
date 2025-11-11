@@ -1,0 +1,32 @@
+{
+  "hosting": {
+    "public": "CONTROLE DE OBRAS V12.2",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "*.md",
+      "migracao_firebase.md"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "hosting": {
+      "port": 5000
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
+  }
+}

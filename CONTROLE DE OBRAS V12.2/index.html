@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Obras - FRINOX</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+
+        /* Animações e Toast */
+        @keyframes flash-opacity { 50% { opacity: 0.4; } }
+        @keyframes slide-in {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slide-out {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        .toast { animation: slide-in 0.5s forwards, slide-out 0.5s forwards 4s; }
+        
+        /* v10.9: Fundo de conflito mais suave */
+        .conflict-flash { animation: flash-opacity 1s infinite; }
+        .colaborador-card.conflict { background-color: #854d0e; } /* Tom de âmbar/laranja mais escuro */
+
+        /* Estilos do Gantt */
+        .gantt-wrapper { position: relative; }
+        .gantt-header-container {
+            position: sticky;
+            top: 0;
+            z-index: 25;
+            display: flex;
+            background-color: #1f2937;
+        }
+        .gantt-sidebar-header-space {
+            width: 350px;
+            flex-shrink: 0;
+            height: 110px;
+            border-right: 1px solid #4b5563;
+        }
+        .gantt-timeline-header-wrapper {
+            flex-grow: 1;
+            overflow: hidden;
+        }
+        .gantt-body-container {
+            display: flex;
+        }
+        .gantt-sidebar { width: 350px; flex-shrink: 0; border-right: 1px solid #4b5563; }
+        .gantt-timeline { overflow-x: auto; flex-grow: 1; }
+        .gantt-row { height: 40px; display: flex; align-items: center; border-bottom: 1px solid #374151; }
+        .gantt-sidebar .gantt-row[data-type="obra"] { cursor: grab; }
+        .gantt-sidebar .gantt-row[data-type="etapa-group"] { cursor: pointer; }
+        .gantt-timeline-grid { position: relative; }
+        .gantt-bar {
+            position: absolute; border-radius: 0.375rem; color: white; font-size: 0.75rem;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            height: 28px; display: flex; align-items: center; justify-content: center;
+            transition: filter 0.2s, opacity 0.2s, outline 0.2s;
+        }
+        .gantt-bar.resizable:hover { filter: brightness(1.25); cursor: grab; }
+        .gantt-bar-handle { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 10; }
+        .gantt-bar-handle:hover { background-color: rgba(255,255,255,0.3); }
+        .gantt-bar-handle-left { left: 0; cursor: ew-resize; }
+        .gantt-bar-handle-right { right: 0; cursor: ew-resize; }
+
+        #ganttTodayMarker, #colaboradorTodayMarker { position: absolute; width: 2px; background-color: #ef4444; top: 0; bottom: 0; z-index: 30; }
+
+        /* Estilos da Aplicação */
+        .modal { transition: opacity 0.3s ease; }
+        .modal-content { transition: transform 0.3s ease, opacity 0.3s ease; }
+        .modal.hidden .modal-content { transform: scale(0.95); opacity: 0; }
+        .tab-button.active { border-color: #3b82f6; color: white; }
+        .action-btn { background: none; border: none; color: #9ca3af; cursor: pointer; transition: color 0.2s; }
+        .action-btn:hover { color: white; }
+        .expand-btn { transition: transform 0.2s; }
+        .expand-btn.expanded { transform: rotate(90deg); }
+        .empresa-item.selected { background-color: #3b82f6; }
+
+        .sortable-ghost { opacity: 0.4; background: #4f46e5; border-radius: 8px; }
+        .empresa-group { border: 1px solid #374151; border-radius: 8px; padding: 6px; margin-bottom: 8px; }
+        .list-container { background-color: rgba(17, 24, 39, 0.5); border: 1px solid #374151; border-radius: 8px; padding: 8px; overflow-y: auto; }
+        .project-card { background-color: #1f2937; padding: 0.5rem; border-radius: 0.375rem; cursor: grab; transition: background-color 0.2s; }
+        .project-card:hover { background-color: #374151; }
+
+        /* v10.8: Estilo base do card (sem fundo de integração) */
+        .colaborador-card { 
+            background-color: #1f2937; 
+            padding: 0.5rem 0.8rem; /* Aumentado padding para alocação */
+            border-radius: 0.375rem; 
+            cursor: grab; 
+            transition: background-color 0.2s; 
+            line-height: 1.3; 
+        }
+        .colaborador-card:active { cursor: grabbing; }
+
+        /* v10.10: Layout flexível para card (Nome à esquerda, Tags à direita) - Usado em Alocação */
+        .colaborador-card-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+        .colaborador-info {
+            flex-grow: 1;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            margin-right: 8px; /* Espaço antes das tags */
+            /* v10.9: Fontes para Nome - Cargo */
+            font-size: 0.875rem; /* 14px */
+            font-weight: 500;
+        }
+         .colaborador-info .cargo {
+            font-size: 0.75rem; /* 12px */
+            color: #9ca3af; /* Cinza claro */
+            font-weight: 400;
+         }
+
+        .integracao-tags {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        /* v10.8: Tag de integração (Caixa) - Usada em Alocação */
+        .tag-integracao {
+            font-size: 0.65rem; /* 10px */
+            font-weight: 700;
+            padding: 0.1rem 0.35rem; /* 2px 6px */
+            border-radius: 0.25rem; /* 4px */
+            line-height: 1;
+        }
+        
+        /* v10.9: Cores mais vibrantes para tags */
+        .tag-verde { background-color: #22c55e; color: #ffffff; } /* Verde vivo */
+        .tag-amarela { background-color: #eab308; color: #ffffff; } /* Amarelo puro */
+        .tag-vermelha { background-color: #ef4444; color: #ffffff; } /* Vermelho vivo */
+
+        /* v10.9: Cores de TEXTO para datas (Aba Gerenciamento e Integrações) */
+        .data-verde { color: #22c55e; font-weight: 500; }
+        .data-amarela { color: #eab308; font-weight: 500; }
+        .data-vermelha { color: #ef4444; font-weight: 500; }
+        .data-cinza { color: #9ca3af; font-weight: 400; } /* N/A */
+
+        /* v10.8: Layout Aba Integrações (Nome - Cargo à esquerda, Datas à direita) */
+        #contentIntegracoes .colaborador-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start; /* Alinha no topo */
+        }
+        #contentIntegracoes .integracao-datas {
+            flex-shrink: 0;
+            text-align: right;
+            font-size: 0.75rem; /* 12px */
+            line-height: 1.4;
+        }
+
+
+        /* Ajustes Hotelaria */
+        .hotel-dropzone.dropzone-empty { border: 2px dashed #4b5563; }
+        .hotel-dropzone .colaborador-card { padding: 0.15rem 0.4rem; line-height: 1.2; }
+        /* .hotel-dropzone .colaborador-card .nome { font-size: 0.7rem; } */
+        .hotel-dropzone::-webkit-scrollbar { width: 8px; }
+        .hotel-dropzone::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        .hotel-dropzone::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        .hotel-dropzone::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+        .zoom-controls { position: absolute; bottom: 1rem; right: 1rem; z-index: 40; display: flex; gap: 0.5rem; }
+        .zoom-btn { background-color: rgba(31, 41, 55, 0.8); border: 1px solid #4b5563; color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; font-weight: bold; cursor: pointer; }
+        .zoom-btn:hover { background-color: #374151; }
+
+        .sidebar-icon-container { flex-shrink: 0; width: 24px; text-align: center; }
+
+        /* Modo de Cópia */
+        .gantt-bar.copy-source { opacity: 0.3; cursor: not-allowed; filter: grayscale(80%); }
+        .gantt-bar.copy-targetable { cursor: copy; }
+        .gantt-bar.copy-targetable:hover { outline: 3px solid #60a5fa; filter: brightness(1.5); }
+        body.copy-mode-active #ganttChartWrapper { user-select: none; }
+        /* v11.1: Permite cliques em botões mesmo em modo de cópia */
+        body.copy-mode-active .gantt-row { pointer-events: auto; }
+
+        /* Busca e Notificações */
+        #notification-badge {
+            position: absolute; top: -5px; right: -8px; width: 18px; height: 18px;
+            border-radius: 50%; background-color: #ef4444; color: white;
+            font-size: 10px; font-weight: bold; display: flex; align-items: center; justify-content: center;
+        }
+        .dropdown-menu {
+            display: none; position: absolute; top: 100%; right: 0; background-color: #1f2937;
+            border: 1px solid #4b5563; border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            width: 320px; max-height: 400px; overflow-y: auto; z-index: 100;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <div id="copyModePanel" class="hidden fixed top-0 left-0 right-0 z-[1000] bg-gray-900 bg-opacity-90 p-3 shadow-lg">
+        <div class="container mx-auto flex justify-center items-center gap-6">
+            <p class="text-yellow-300 font-semibold text-center">
+                <svg class="w-6 h-6 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                MODO DE CÓPIA ATIVADO: Clique em uma barra no cronograma para colar os colaboradores.
+            </p>
+            <button id="cancelCopyModeBtn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex-shrink-0">Cancelar</button>
+        </div>
+    </div>
+
+    <div id="toast-container" class="fixed bottom-4 right-4 z-[1002] space-y-2"></div>
+
+    <div id="loader" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-[1001]">
+        <div class="h-12 w-12 border-4 border-gray-600 border-t-blue-500 rounded-full animate-spin"></div>
+    </div>
+
+    <div id="app-container" class="hidden">
+        <div class="container mx-auto p-4 md:p-6 lg:p-8">
+            <header class="mb-8 flex flex-col md:flex-row justify-between items-center gap-4 flex-wrap">
+                 <div class="text-center md:text-left flex-shrink-0">
+                    <img src="https://i.postimg.cc/N0TbHjmj/LOGO-FRINOX.png" alt="Logo FRINOX" class="mx-auto md:mx-0 mb-2 h-16 sm:h-24" style="width: auto; object-fit: contain;">
+                    <p class="text-gray-400 text-sm sm:text-base">Sistema de Controle e Planejamento de Obras</p>
+                </div>
+                <div class="flex-grow w-full md:w-auto md:max-w-md relative">
+                    <input type="text" id="globalSearchInput" placeholder="Buscar por obra, pedido, etapa ou colaborador..." class="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 px-4 text-white placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500">
+                    <div id="globalSearchResults" class="dropdown-menu"></div>
+                </div>
+                <div class="flex items-center gap-2 sm:gap-4 flex-shrink-0">
+                    <button id="goToTodayBtn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-transform hover:scale-105">Hoje</button>
+                    <div class="relative">
+                        <button id="notificationsBtn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold p-2 rounded-lg transition-transform hover:scale-105" title="Notificações">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 00-5-5.917V5a1 1 0 00-2 0v.083A6 6 0 006 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                            <span id="notification-badge" class="hidden"></span>
+                        </button>
+                        <div id="notificationMenu" class="dropdown-menu"></div>
+                    </div>
+                    <button id="settingsBtn" class="hidden bg-gray-700 hover:bg-gray-600 text-white font-semibold p-2 rounded-lg transition-transform hover:scale-105" title="Configurações">
+                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    </button>
+                    <button id="addObraBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-transform hover:scale-105">+ Novo Projeto</button>
+                </div>
+            </header>
+
+            <div class="mb-6 flex justify-center border-b border-gray-700 flex-wrap">
+                <button data-tab="Gantt" class="tab-button active py-2 px-6 text-base font-semibold border-b-2">Cronograma (Gantt)</button>
+                <button data-tab="Colaboradores" class="tab-button py-2 px-6 text-base font-semibold border-b-2 border-transparent hover:border-blue-500 hover:text-blue-400 transition">Visão por Colaborador</button>
+                <button data-tab="Dashboard" class="tab-button py-2 px-6 text-base font-semibold border-b-2 border-transparent hover:border-blue-500 hover:text-blue-400 transition">Dashboard</button>
+                <button data-tab="Gerenciamento" class="tab-button py-2 px-6 text-base font-semibold border-b-2 border-transparent hover:border-blue-500 hover:text-blue-400 transition">Gerenciamento</button>
+                <button data-tab="Integracoes" class="tab-button py-2 px-6 text-base font-semibold border-b-2 border-transparent hover:border-blue-500 hover:text-blue-400 transition">Integrações</button>
+            </div>
+
+            <main>
+                <div id="contentGantt" class="tab-content">
+                    <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-2xl">
+                        <div class="flex flex-wrap justify-between items-center mb-4 gap-4">
+                            <h2 class="text-xl sm:text-2xl font-bold text-white flex-shrink-0 mr-6">Linha do Tempo das Obras</h2>
+                             <div class="flex items-center gap-6 text-xs text-gray-400 flex-shrink-0 mr-auto">
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-lg text-blue-400">!</span>
+                                    <span>= Pendências Projeto</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-base text-yellow-400">!</span>
+                                    <span>= Pendências RH</span>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-x-4 gap-y-2 flex-wrap">
+                                <div class="flex items-center gap-2">
+                                    <label for="obraSort" class="text-sm font-medium">Ordenar por:</label>
+                                    <select id="obraSort" class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2">
+                                        <option value="proximas">Obras em Andamento/Próximas</option>
+                                        <option value="pendencias_projeto">Pendências Projeto</option>
+                                        <option value="pendencias_rh">Pendências RH</option>
+                                        <option value="numero">Número do Projeto</option>
+                                        <option value="criacao">Data de Criação</option>
+                                        <option value="manual">Ordem Manual</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm font-medium">Rótulo:</label>
+                                    <button id="toggleObraLabelBtn" title="Alternar Rótulo da Barra de Projeto" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-3 rounded-lg text-sm transition"></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="ganttChartWrapper" class="gantt-wrapper">
+                             <div id="ganttChartContainer"></div>
+                             <div class="zoom-controls">
+                                <button id="zoomOutBtn" class="zoom-btn">-</button>
+                                <button id="zoomInBtn" class="zoom-btn">+</button>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="contentColaboradores" class="tab-content hidden">
+                     <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-2xl">
+                         <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
+                            <h2 class="text-xl sm:text-2xl font-bold text-white">Linha do Tempo por Colaborador</h2>
+                            <div class="flex items-center gap-4">
+                                <div class="flex items-center gap-2">
+                                    <label for="colaboradorSort" class="text-sm font-medium">Ordenar por:</label>
+                                    <select id="colaboradorSort" class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2">
+                                        <option value="proximas">Obras em Andamento/Próximas</option>
+                                        <option value="alfabetica">Nome (A-Z)</option>
+                                        <option value="empresa">Empresa</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm font-medium">Rótulo:</label>
+                                    <button id="toggleColaboradorLabelBtn" title="Alternar Rótulo da Barra" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-3 rounded-lg text-sm transition"></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="colaboradorGanttWrapper" class="gantt-wrapper">
+                            <div id="colaboradorGanttContainer"></div>
+                            <div class="zoom-controls">
+                                <button id="colaboradorZoomOutBtn" class="zoom-btn">-</button>
+                                <button id="colaboradorZoomInBtn" class="zoom-btn">+</button>
+                             </div>
+                        </div>
+                     </div>
+                </div>
+
+                <div id="contentDashboard" class="tab-content hidden">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg flex items-center gap-4">
+                            <div class="bg-blue-600 p-3 rounded-full"><svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg></div>
+                            <div>
+                                <p class="text-gray-400 text-sm font-medium">Obras em Andamento</p>
+                                <p id="dbObrasAndamento" class="text-3xl font-bold text-white">-</p>
+                            </div>
+                        </div>
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg flex items-center gap-4">
+                             <div class="bg-yellow-500 p-3 rounded-full"><svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg></div>
+                            <div>
+                                <p class="text-gray-400 text-sm font-medium">Colaboradores em Conflito</p>
+                                <p id="dbColaboradoresConflito" class="text-3xl font-bold text-white">-</p>
+                            </div>
+                        </div>
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg flex items-center gap-4">
+                           <div class="bg-red-500 p-3 rounded-full"><svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>
+                            <div>
+                                <p class="text-gray-400 text-sm font-medium">Pendências de RH</p>
+                                <p id="dbPendenciasRh" class="text-3xl font-bold text-white">-</p>
+                            </div>
+                        </div>
+                         <div class="bg-gray-800 p-6 rounded-lg shadow-lg flex items-center gap-4">
+                           <div class="bg-indigo-500 p-3 rounded-full"><svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg></div>
+                            <div>
+                                <p class="text-gray-400 text-sm font-medium">Pendências de Projeto</p>
+                                <p id="dbPendenciasProjeto" class="text-3xl font-bold text-white">-</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                            <h3 class="text-xl font-semibold mb-4 text-white">Etapas Críticas (Próximos 7 dias)</h3>
+                            <div id="dbProximasEtapas" class="space-y-3 max-h-96 overflow-y-auto">
+                                <p class="text-gray-500">Nenhuma etapa crítica encontrada.</p>
+                            </div>
+                        </div>
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                            <h3 class="text-xl font-semibold mb-4 text-white">Log de Atividades Recentes</h3>
+                            <div id="dbAtividadesRecentes" class="space-y-3 max-h-96 overflow-y-auto">
+                                <p class="text-gray-500">Nenhuma atividade recente.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="contentGerenciamento" class="tab-content hidden">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-2xl">
+                             <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-xl font-semibold text-white">Empresas</h3>
+                                <button id="addEmpresaBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-1 px-3 rounded-lg text-sm">+ Adicionar</button>
+                            </div>
+                            <div id="empresaList" class="space-y-2 max-h-[60vh] overflow-y-auto pr-2"></div>
+                        </div>
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-2xl">
+                             <div class="flex justify-between items-center mb-4">
+                                <h3 id="funcionariosTitle" class="text-xl font-semibold text-white">Funcionários</h3>
+                                <button id="addFuncionarioBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-1 px-3 rounded-lg text-sm disabled:opacity-50" disabled>+ Adicionar</button>
+                            </div>
+                            <div id="funcionarioList" class="space-y-2 max-h-[60vh] overflow-y-auto pr-2"></div>
+                        </div>
+                    </div>
+                     <div class="bg-gray-800 p-6 rounded-lg shadow-2xl">
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciamento de Projetos Ativos</h3>
+                         <p class="text-sm text-gray-400 mb-4">Arraste os projetos entre as listas para exibi-los ou ocultá-los do cronograma principal.</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 class="text-lg font-semibold text-green-400 mb-2">Projetos Ativos no Gantt</h4>
+                                <div id="activeProjectsList" class="list-container space-y-2 min-h-[100px]"></div>
+                            </div>
+                             <div>
+                                <h4 class="text-lg font-semibold text-gray-400 mb-2">Projetos Arquivados</h4>
+                                <div id="archivedProjectsList" class="list-container space-y-2 min-h-[100px]"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="contentIntegracoes" class="tab-content hidden">
+                    <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-2xl">
+                        <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                            <h2 class="text-xl sm:text-2xl font-bold text-white">Visão de Integrações</h2>
+                            <div class="flex items-center gap-x-6 gap-y-2 flex-wrap">
+                                <!-- Filtros -->
+                                <div class="flex items-center gap-4">
+                                    <span class="text-sm font-medium">Filtrar por:</span>
+                                    <label class="flex items-center gap-2 text-sm">
+                                        <input type="checkbox" id="integracaoFiltroBRF" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                                        Integração BRF
+                                    </label>
+                                    <label class="flex items-center gap-2 text-sm">
+                                        <input type="checkbox" id="integracaoFiltroJBS" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                                        Integração JBS
+                                    </label>
+                                </div>
+                                <!-- v11.4: Filtro de Status Adicionado -->
+                                <div class="flex items-center gap-2">
+                                    <label for="integracaoFiltroStatus" class="text-sm font-medium">Filtrar por Status:</label>
+                                    <select id="integracaoFiltroStatus" class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2">
+                                        <option value="todos">Todos</option>
+                                        <option value="em_dia">Em Dia</option>
+                                        <option value="vencendo">Vencendo (<= 30d)</option>
+                                        <option value="vencida">Vencida</option>
+                                        <option value="sem_integracao">Sem Integração</option>
+                                    </select>
+                                </div>
+                                <!-- Ordenação -->
+                                <div class="flex items-center gap-2">
+                                    <label for="integracaoSort" class="text-sm font-medium">Ordenar por:</label>
+                                    <select id="integracaoSort" class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2">
+                                        <option value="empresa">Empresa (Status)</option>
+                                        <option value="nome">Nome (Status)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Resumo v10.9 -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <div class="bg-gray-700/50 p-3 rounded-lg">
+                                <p class="text-sm text-gray-400">Total Vencidas</p>
+                                <p id="integracaoStatsVencida" class="text-2xl font-bold text-red-500">-</p>
+                            </div>
+                            <div class="bg-gray-700/50 p-3 rounded-lg">
+                                <p class="text-sm text-gray-400">Total Vencendo (<= 30d)</p>
+                                <p id="integracaoStatsVencendo" class="text-2xl font-bold text-yellow-400">-</p>
+                            </div>
+                             <div class="bg-gray-700/50 p-3 rounded-lg">
+                                <p class="text-sm text-gray-400">Total Em Dia (> 30d)</p>
+                                <p id="integracaoStatsEmDia" class="text-2xl font-bold text-green-400">-</p>
+                            </div>
+                        </div>
+
+                        <!-- Lista de Colaboradores -->
+                        <div id="integracoesListContainer" class="list-container p-1 max-h-[70vh]">
+                            <!-- O JS irá popular esta área -->
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <footer class="text-center py-6 mt-8 border-t border-gray-700">
+                <!-- v12.1: Atualiza número da versão -->
+                <p id="footer-text" class="text-sm text-gray-500">© 2025 FRINOX | Desenvolvido por Alisson Araújo. Versão 12.1</p>
+                <div class="mt-2">
+                     <button id="toggleLogBtn" class="text-xs text-gray-600 hover:text-gray-400">Ativar Log de Depuração</button>
+                     <button id="downloadLogBtn" class="hidden text-xs text-blue-500 hover:text-blue-400 ml-4">Baixar Log</button>
+                </div>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Templates -->
+    <template id="comment-template">
+        <div class="bg-gray-700/50 p-3 rounded-lg comment-item">
+            <div class="flex justify-between items-center mb-1">
+                <p class="font-semibold text-sm text-blue-300 comment-user"></p>
+                <div class="flex items-center gap-3">
+                    <p class="text-xs text-gray-400 comment-date"></p>
+                    <div class="comment-actions"></div>
+                </div>
+            </div>
+            <p class="text-white whitespace-pre-wrap text-sm comment-text"></p>
+        </div>
+    </template>
+
+    <template id="comment-actions-template">
+        <button class="edit-comment-btn action-btn text-yellow-400 hover:text-yellow-300" title="Editar">
+            <svg class="w-4 h-4 pointer-events-none" fill="currentColor" viewBox="0 0 20 20"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z"></path><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd"></path></svg>
+        </button>
+        <button class="delete-comment-btn action-btn text-red-500 hover:text-red-400" title="Excluir">
+            <svg class="w-4 h-4 pointer-events-none" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd"></path></svg>
+        </button>
+    </template>
+
+
+    <!-- Modals -->
+    <div id="loginModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-[1000]">
+        <div class="modal-content bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-sm">
+            <img src="https://i.postimg.cc/N0TbHjmj/LOGO-FRINOX.png" alt="Logo FRINOX" class="mx-auto mb-4 h-20" style="width: auto; object-fit: contain;">
+            <h2 class="text-2xl font-bold mb-6 text-white text-center">Acesso ao Sistema</h2>
+            <form id="loginForm">
+                <div class="mb-4">
+                    <label for="loginUsuario" class="block text-gray-300 font-semibold mb-2">Usuário</label>
+                    <input type="text" id="loginUsuario" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white" required>
+                </div>
+                <div class="mb-6">
+                    <label for="loginSenha" class="block text-gray-300 font-semibold mb-2">Senha</label>
+                    <input type="password" id="loginSenha" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white" required>
+                </div>
+                <p id="loginError" class="text-red-400 text-sm mb-4 text-center hidden"></p>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Entrar</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="obraModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-50 opacity-0">
+        <div class="modal-content bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col opacity-0 scale-95">
+            <h2 id="obraModalTitle" class="text-2xl font-bold mb-4 text-white flex-shrink-0">Novo Projeto</h2>
+            <div class="flex-grow overflow-y-auto pr-4">
+                <form id="obraForm" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input type="hidden" id="obraId">
+                    <div class="md:col-span-2">
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Nome do Projeto</label>
+                        <input type="text" id="obraNome" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white" required>
+                    </div>
+                     <div>
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Número do Projeto</label>
+                        <input type="text" id="obraNumero" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white" required>
+                    </div>
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Cliente</label>
+                        <input type="text" id="obraCliente" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                </form>
+
+                <div class="mt-6">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-xl font-semibold text-white">Pedidos do Projeto</h3>
+                        <button id="addPedidoBtn" type="button" class="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-lg text-sm">+ Adicionar Pedido</button>
+                    </div>
+                    <div id="pedidosContainer" class="space-y-4"></div>
+                </div>
+            </div>
+            <div class="flex-shrink-0 flex justify-between items-center mt-4 pt-4 border-t border-gray-700">
+                <div class="flex gap-2 flex-wrap">
+                     <button id="deleteObraBtn" type="button" class="bg-red-700 hover:bg-red-800 text-white font-bold py-2 px-5 rounded-lg text-base">Excluir Projeto</button>
+                     <button id="generateObraReportBtn" type="button" class="bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 px-5 rounded-lg text-base">Relatório</button>
+                     <button id="activityLogBtn" type="button" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-5 rounded-lg text-base">Histórico</button>
+                     <button id="pendenciasFromObraModalBtn" type="button" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-5 rounded-lg text-base">Pendências</button>
+                </div>
+                <div class="flex space-x-4">
+                    <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                    <button id="saveObraBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar Projeto</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="empresaModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-50 opacity-0">
+        <div class="modal-content bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-lg opacity-0 scale-95">
+            <h2 id="empresaModalTitle" class="text-2xl font-bold mb-6 text-white">Nova Empresa</h2>
+            <form id="empresaForm">
+                <input type="hidden" id="empresaId">
+                <div class="mb-4">
+                    <label for="empresaNome" class="block text-gray-300 font-semibold mb-2">Nome da Empresa</label>
+                    <input type="text" id="empresaNome" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white" required>
+                </div>
+                <div class="mb-6">
+                    <label for="empresaTipo" class="block text-gray-300 font-semibold mb-2">Tipo</label>
+                    <select id="empresaTipo" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                        <option value="Interna">Interna (FRINOX)</option>
+                        <option value="Terceirizada">Terceirizada</option>
+                    </select>
+                </div>
+                <div class="flex justify-end space-x-4">
+                    <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                    <button type="submit" id="saveEmpresaBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="funcionarioModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-50 opacity-0">
+        <div class="modal-content bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-xl opacity-0 scale-95">
+            <h2 id="funcionarioModalTitle" class="text-2xl font-bold mb-6 text-white">Novo Funcionário</h2>
+            <form id="funcionarioForm">
+                <input type="hidden" id="funcionarioId">
+                <input type="hidden" id="funcionarioEmpresaId">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-2">Nome do Funcionário</label>
+                        <input type="text" id="funcionarioNome" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white" required>
+                    </div>
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-2">Cargo / Especialidade</label>
+                        <input type="text" id="funcionarioCargo" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                    <div class="mt-2">
+                        <label class="block text-gray-300 font-semibold mb-2">Validade Integração BRF</label>
+                        <input type="date" id="funcionarioIntegracaoBRF" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                    <div class="mt-2">
+                        <label class="block text-gray-300 font-semibold mb-2">Validade Integração JBS</label>
+                        <input type="date" id="funcionarioIntegracaoJBS" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                </div>
+                <div class="flex justify-end space-x-4 mt-6">
+                    <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                    <button type="submit" id="saveFuncionarioBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- v12.1: Ajuste de largura (w-[95%]) -->
+    <div id="alocacaoModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-[55] opacity-0">
+        <div class="modal-content bg-gray-800 p-6 rounded-lg shadow-2xl w-[95%] max-h-[95vh] flex flex-col opacity-0 scale-95">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-4 flex-shrink-0 gap-4">
+                <div>
+                    <h2 id="alocacaoModalTitle" class="text-2xl font-bold text-white">Alocar Colaboradores</h2>
+                    <p id="alocacaoModalSubtitle" class="text-sm text-gray-400">Arraste os colaboradores para alocar ou desalocar.</p>
+                </div>
+                <div class="w-full md:w-auto flex flex-col md:flex-row items-center gap-4">
+                    <input id="alocacaoSearch" type="text" placeholder="Buscar colaborador..." class="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-sm w-full md:w-48">
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm">Ordenar por:</label>
+                         <select id="sortAlocacao" class="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-sm">
+                            <option value="empresa">Empresa</option>
+                            <option value="alfabetica">Ordem Alfabética</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v12.1: Ajuste de altura (min-h-[70vh]) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 flex-grow min-h-0 min-h-[70vh]">
+                <!-- Coluna Disponíveis -->
+                <div class="flex flex-col min-h-0">
+                    <div class="flex-shrink-0 mb-2">
+                        <h3 class="text-lg font-semibold text-green-400">Disponíveis <span id="disponiveisTotalCount" class="text-sm font-normal text-gray-400"></span></h3>
+                        <!-- v10.8: Legenda Atualizada (inclui Vencida) -->
+                        <div class="flex flex-col sm:flex-row justify-between items-baseline gap-2 mt-1 text-xs">
+                            <div class="flex items-center gap-x-3 gap-y-1 flex-wrap">
+                                <span class="font-medium">Legenda (Tags):</span>
+                                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-sm tag-verde"></span> Em dia (>30d)</span>
+                                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-sm tag-amarela"></span> Vencendo (<=30d)</span>
+                                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-sm tag-vermelha"></span> Vencida</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="font-medium">Filtrar integrações:</span>
+                                <label class="flex items-center gap-1"><input type="checkbox" id="filtroBRF" class="w-3 h-3 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"> BRF</label>
+                                <label class="flex items-center gap-1"><input type="checkbox" id="filtroJBS" class="w-3 h-3 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"> JBS</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="disponiveisList" class="list-container p-1 flex-grow"></div>
+                </div>
+                <!-- Coluna Alocados & Reservas -->
+                <div class="flex flex-col min-h-0">
+                    <!-- Seção Alocados -->
+                    <div class="flex-auto flex flex-col min-h-0">
+                        <div class="flex justify-between items-center mb-2 flex-shrink-0">
+                            <h3 class="text-lg font-semibold text-blue-400">Alocados na Etapa <span id="alocadosCount" class="text-sm font-normal text-gray-400"></span></h3>
+                            <button id="copyAllocationsBtn" type="button" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-1 px-2 rounded-lg text-sm">Copiar alocados para...</button>
+                        </div>
+                        <div id="alocadosList" class="list-container p-1 w-full flex-grow"></div>
+                    </div>
+                    <!-- Seção Reservas -->
+                    <div class="flex-shrink-0 flex flex-col mt-4" style="height: 180px;">
+                        <div class="flex justify-between items-center mb-2 flex-shrink-0">
+                             <h3 class="text-lg font-semibold text-yellow-400">Reservas <span id="reservasCount" class="text-sm font-normal text-gray-400"></span></h3>
+                        </div>
+                        <div id="reservasList" class="list-container p-1 w-full flex-grow"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-shrink-0 flex flex-col md:flex-row justify-between items-center mt-4 pt-4 border-t border-gray-700 gap-4">
+                <div class="flex gap-4">
+                    <button id="infoFromAlocacaoBtn" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg">Informações</button>
+                    <button id="generateEtapaReportBtn" type="button" class="bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 px-5 rounded-lg text-base">Relatório</button>
+                    <button id="confirmVisualizacaoBtn" type="button" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-5 rounded-lg text-base hidden">Confirmar Visualização (RH)</button>
+                </div>
+                <div class="flex space-x-4">
+                    <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                    <button id="saveAlocacaoBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar Alocação</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="infoEtapaModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-[56] opacity-0">
+        <div class="modal-content bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-7xl max-h-[95vh] flex flex-col opacity-0 scale-95">
+            <input type="hidden" id="infoEtapaId">
+            <div class="flex justify-between items-center mb-4 flex-shrink-0">
+                 <div>
+                    <h2 id="infoEtapaModalTitle" class="text-2xl font-bold text-white">Informações da Etapa</h2>
+                    <p id="infoEtapaModalSubtitle" class="text-sm text-gray-400"></p>
+                </div>
+                <div id="infoEtapaNavigator" class="text-center hidden">
+                    <span id="infoEtapaNavigatorText" class="font-semibold text-white"></span>
+                    <div class="flex justify-center items-center gap-4 mt-1">
+                        <button id="infoEtapaNavPrev" class="bg-gray-600 hover:bg-gray-500 rounded-full p-1 disabled:opacity-50">
+                            <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        </button>
+                        <button id="infoEtapaNavNext" class="bg-gray-600 hover:bg-gray-500 rounded-full p-1 disabled:opacity-50">
+                            <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-grow overflow-y-auto pr-2 space-y-6">
+                <div class="bg-gray-900/50 p-4 rounded-lg">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-gray-400 font-semibold mb-1 text-xs">Nome da Etapa</label>
+                            <p id="infoEtapaNome" class="text-white font-medium"></p>
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 font-semibold mb-1 text-xs">Data de Início</label>
+                            <p id="infoEtapaInicio" class="text-white font-medium"></p>
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 font-semibold mb-1 text-xs">Data de Fim</label>
+                            <p id="infoEtapaFim" class="text-white font-medium"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Nome do Cliente</label>
+                        <input type="text" id="infoClienteNome" class="w-full p-2 border bg-gray-700/50 border-gray-600 rounded-lg text-gray-400" readonly>
+                    </div>
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Telefone Cliente</label>
+                        <input type="text" id="infoClienteTelefone" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Email Cliente</label>
+                        <input type="email" id="infoClienteEmail" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                    <div>
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Encarregado da Obra</label>
+                        <input type="text" id="infoEncarregado" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white">
+                    </div>
+                    <div class="md:col-span-2 lg:col-span-4">
+                        <label class="block text-gray-300 font-semibold mb-1 text-sm">Descrição do Serviço</label>
+                        <textarea id="infoDescricao" rows="3" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white"></textarea>
+                    </div>
+                </div>
+
+                <div class="bg-gray-900/50 p-4 rounded-lg">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-lg font-semibold text-white">Logística de Viagem</h3>
+                        <button id="addLogisticaBtn" type="button" class="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-lg text-sm">+ Adicionar Veículo</button>
+                    </div>
+                    <div id="logisticaContainer" class="space-y-2"></div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                     <div class="bg-gray-900/50 p-4 rounded-lg lg:col-span-1">
+                        <h3 class="text-lg font-semibold text-white mb-3">Procedimentos</h3>
+                        <div id="procedimentosContainer" class="space-y-3"></div>
+                         <div class="mt-4">
+                             <label class="block text-gray-300 font-semibold mb-1 text-sm">Nome do Responsável</label>
+                             <input type="text" id="infoResponsavelNome" placeholder="Nome do responsável..." class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white text-sm">
+                         </div>
+                    </div>
+                    <div class="bg-gray-900/50 p-4 rounded-lg lg:col-span-2">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-lg font-semibold text-white">Organização de Hotelaria</h3>
+                            <div id="hotelStats" class="text-xs text-gray-400 text-right"></div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+                            <div class="md:col-span-2">
+                                <h4 class="text-sm font-semibold text-center text-gray-400 mb-2">Alocados na Etapa</h4>
+                                <div id="hotelAlocadosList" class="hotel-dropzone bg-gray-800/50 rounded-md p-1 h-64 overflow-y-auto"></div>
+                            </div>
+                             <div class="md:col-span-3 grid grid-cols-3 gap-2">
+                                <div>
+                                    <h4 class="text-sm font-semibold text-center text-blue-300 mb-2">Individual</h4>
+                                    <div id="hotelIndividualList" class="hotel-dropzone bg-gray-800/50 rounded-md p-1 h-64 overflow-y-auto"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-sm font-semibold text-center text-green-300 mb-2">Duplo</h4>
+                                    <div id="hotelDuploList" class="hotel-dropzone bg-gray-800/50 rounded-md p-1 h-64 overflow-y-auto"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-sm font-semibold text-center text-yellow-300 mb-2">Triplo</h4>
+                                    <div id="hotelTriploList" class="hotel-dropzone bg-gray-800/50 rounded-md p-1 h-64 overflow-y-auto"></div>
+                                </div>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-900/50 p-4 rounded-lg">
+                    <h3 class="text-lg font-semibold text-white mb-3">Comentários e Histórico da Etapa</h3>
+                    <div id="comentariosContainer" class="space-y-3 max-h-60 overflow-y-auto mb-4 border-b border-gray-700 pb-3">
+                        <p class="text-sm text-gray-500">Nenhum comentário ainda.</p>
+                    </div>
+                    <form id="comentarioForm" class="flex items-start gap-3">
+                        <textarea id="novoComentarioInput" placeholder="Adicionar um comentário..." rows="2" class="w-full p-2 border bg-gray-700 border-gray-600 rounded-lg text-white text-sm" required></textarea>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg text-sm">Enviar</button>
+                    </form>
+                </div>
+            </div>
+            <div class="flex-shrink-0 flex justify-end space-x-4 mt-4 pt-4 border-t border-gray-700">
+                <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Fechar</button>
+                <button id="saveInfoEtapaBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar Informações</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="fechamentoModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-[57] opacity-0">
+        <div class="modal-content bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col opacity-0 scale-95">
+            <input type="hidden" id="fechamentoObraId">
+            <h2 id="fechamentoModalTitle" class="text-2xl font-bold mb-4 text-white">Fechamento / Pendências</h2>
+            <div class="flex-grow overflow-y-auto pr-2 space-y-6">
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Pendências</h3>
+                    <div id="pendenciasList" class="space-y-2"></div>
+                    <div class="flex gap-2 mt-2">
+                        <input type="text" id="newPendenciaInput" placeholder="Adicionar nova pendência..." class="w-full p-2 text-sm bg-gray-700 border-gray-600 rounded">
+                        <button id="addPendenciaBtn" class="bg-green-600 hover:bg-green-700 text-white font-bold p-2 rounded text-sm">Adicionar</button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-gray-300 font-semibold mb-2 text-lg">Observações</label>
+                    <textarea id="fechamentoObservacoes" rows="4" class="w-full p-2 bg-gray-700 border-gray-600 rounded text-white"></textarea>
+                </div>
+                <div class="flex items-center">
+                    <input id="obraFinalizadaCheckbox" type="checkbox" class="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500">
+                    <label for="obraFinalizadaCheckbox" class="ml-2 block text-lg font-semibold text-white">Marcar obra como Finalizada</label>
+                </div>
+            </div>
+            <div class="flex-shrink-0 flex justify-end space-x-4 mt-4 pt-4 border-t border-gray-700">
+                <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                <button id="saveFechamentoBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="activityLogModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-[58] opacity-0">
+        <div class="modal-content bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col opacity-0 scale-95">
+             <h2 id="activityLogModalTitle" class="text-2xl font-bold mb-4 text-white flex-shrink-0">Histórico de Atividades</h2>
+             <div id="activityLogContainer" class="flex-grow overflow-y-auto pr-2 space-y-3"></div>
+             <div class="flex-shrink-0 flex justify-end mt-4 pt-4 border-t border-gray-700">
+                <button type="button" class="btn-cancel-log bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-[59] opacity-0">
+        <div class="modal-content bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col opacity-0 scale-95">
+             <h2 class="text-2xl font-bold mb-4 text-white flex-shrink-0">Configurações de Usuários</h2>
+             <div class="flex-grow grid grid-cols-1 md:grid-cols-2 gap-6 min-h-0">
+                <div class="flex flex-col">
+                    <h3 class="text-lg font-semibold mb-2">Usuários Cadastrados</h3>
+                    <div id="userListContainer" class="flex-grow overflow-y-auto pr-2 bg-gray-900/50 rounded-lg p-2"></div>
+                </div>
+                <div>
+                    <h3 id="userFormTitle" class="text-lg font-semibold mb-2">Adicionar Novo Usuário</h3>
+                     <form id="userForm" class="space-y-4">
+                        <input type="hidden" id="userId">
+                        <div>
+                            <label for="userNome" class="block text-sm font-medium text-gray-300">Nome (para histórico)</label>
+                            <input type="text" id="userNome" class="mt-1 w-full p-2 bg-gray-700 border-gray-600 rounded" required>
+                        </div>
+                         <div>
+                            <label for="userLogin" class="block text-sm font-medium text-gray-300">Login</label>
+                            <input type="text" id="userLogin" class="mt-1 w-full p-2 bg-gray-700 border-gray-600 rounded" required>
+                        </div>
+                        <div>
+                            <label for="userSenha" class="block text-sm font-medium text-gray-300">Senha</label>
+                            <input type="password" id="userSenha" class="mt-1 w-full p-2 bg-gray-700 border-gray-600 rounded" placeholder="Deixe em branco para não alterar">
+                        </div>
+                        <div>
+                            <label for="userPerfil" class="block text-sm font-medium text-gray-300">Perfil de Permissão</label>
+                             <select id="userPerfil" class="mt-1 w-full p-2 bg-gray-700 border-gray-600 rounded">
+                                <option value="Normal">Normal</option>
+                                <option value="RH">RH</option>
+                                <option value="Visualizacao">Visualização</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="flex justify-end gap-2 pt-2">
+                             <button type="button" id="clearUserFormBtn" class="bg-gray-500 hover:bg-gray-400 text-white font-bold py-2 px-4 rounded-lg">Limpar</button>
+                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Salvar Usuário</button>
+                        </div>
+                    </form>
+                </div>
+             </div>
+             <div class="flex-shrink-0 flex justify-end mt-4 pt-4 border-t border-gray-700">
+                <button type="button" class="btn-cancel bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirmModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-[60] opacity-0">
+        <div class="modal-content bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-sm opacity-0 scale-95">
+            <h2 id="confirmTitle" class="text-xl font-bold mb-4 text-white">Confirmar Ação</h2>
+            <p id="confirmMessage" class="text-gray-300 mb-6"></p>
+            <div class="flex justify-end space-x-4">
+                <button id="confirmCancel" class="bg-gray-600 hover:bg-gray-500 text-gray-200 font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                <button id="confirmOk" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Módulo de Lógica Principal -->
+    <script type="module" src="main-logic.js"></script>
+</body>
+</html>
+

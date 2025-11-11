@@ -1,0 +1,27 @@
+Logs e arquivos de debug
+
+*.log
+firestore-debug.log
+
+Configurações locais do VS Code
+
+.vscode/
+
+Dependências do Node.js
+
+node_modules/
+antigo/
+CONTROLE DE OBRAS V12/
+CONTROLE DE OBRAS V12.1/
+meus_dados_de_teste/
+
+
+Arquivos de build (se aplicável)
+
+dist/
+build/
+
+Arquivos de emuladores do Firebase
+
+.firebase/emulators/
+firebase-local-*
